@@ -669,11 +669,6 @@ var (
 	}
 
 	// MISC settings
-	IgnoreLegacyReceiptsFlag = &cli.BoolFlag{
-		Name:     "ignore-legacy-receipts",
-		Usage:    "Geth will start up even if there are legacy receipts in freezer",
-		Category: flags.MiscCategory,
-	}
 	SyncTargetFlag = &cli.PathFlag{
 		Name:      "synctarget",
 		Usage:     `File for containing the hex-encoded block-rlp as sync target(dev feature)`,
@@ -927,13 +922,13 @@ var (
 	// other profiling behavior or information.
 	MetricsHTTPFlag = &cli.StringFlag{
 		Name:     "metrics.addr",
-		Usage:    "Enable stand-alone metrics HTTP server listening interface",
-		Value:    metrics.DefaultConfig.HTTP,
+		Usage:    `Enable stand-alone metrics HTTP server listening interface.`,
 		Category: flags.MetricsCategory,
 	}
 	MetricsPortFlag = &cli.IntFlag{
-		Name:     "metrics.port",
-		Usage:    "Metrics HTTP server listening port",
+		Name: "metrics.port",
+		Usage: `Metrics HTTP server listening port.
+Please note that --` + MetricsHTTPFlag.Name + ` must be set to start the server.`,
 		Value:    metrics.DefaultConfig.Port,
 		Category: flags.MetricsCategory,
 	}
@@ -1885,25 +1880,6 @@ func SetEthConfig(ctx *cli.Context, stack *node.Node, cfg *ethconfig.Config) {
 			cfg.EthDiscoveryURLs = SplitAndTrim(urls)
 		}
 	}
-	if ctx.IsSet(SyncTargetFlag.Name) {
-		path := ctx.Path(SyncTargetFlag.Name)
-		if path == "" {
-			Fatalf("Failed to resolve file path")
-		}
-		blob, err := os.ReadFile(path)
-		if err != nil {
-			Fatalf("Failed to read block file: %v", err)
-		}
-		rlpBlob, err := hexutil.Decode(string(bytes.TrimRight(blob, "\r\n")))
-		if err != nil {
-			Fatalf("Failed to decode block blob: %v", err)
-		}
-		var block types.Block
-		if err := rlp.DecodeBytes(rlpBlob, &block); err != nil {
-			Fatalf("Failed to decode block: %v", err)
-		}
-		cfg.SyncTarget = &block
-	}
 	// Override any default configs for hard coded networks.
 	switch {
 	case ctx.Bool(MainnetFlag.Name):
@@ -2057,13 +2033,6 @@ func RegisterEthService(stack *node.Node, cfg *ethconfig.Config) (ethapi.Backend
 		Fatalf("Failed to register the Engine API service: %v", err)
 	}
 	stack.RegisterAPIs(tracers.APIs(backend.APIBackend))
-
-	// Register the auxiliary full-sync tester service in case the sync
-	// target is configured.
-	if cfg.SyncTarget != nil && cfg.SyncMode == downloader.FullSync {
-		ethcatalyst.RegisterFullSyncTester(stack, backend, cfg.SyncTarget)
-		log.Info("Registered full-sync tester", "number", cfg.SyncTarget.NumberU64(), "hash", cfg.SyncTarget.Hash())
-	}
 	return backend.APIBackend, backend
 }
 
@@ -2093,6 +2062,24 @@ func RegisterFilterAPI(stack *node.Node, backend ethapi.Backend, ethcfg *ethconf
 		Service:   filters.NewFilterAPI(filterSystem, isLightClient),
 	}})
 	return filterSystem
+}
+
+// RegisterFullSyncTester adds the full-sync tester service into node.
+func RegisterFullSyncTester(stack *node.Node, eth *eth.Ethereum, path string) {
+	blob, err := os.ReadFile(path)
+	if err != nil {
+		Fatalf("Failed to read block file: %v", err)
+	}
+	rlpBlob, err := hexutil.Decode(string(bytes.TrimRight(blob, "\r\n")))
+	if err != nil {
+		Fatalf("Failed to decode block blob: %v", err)
+	}
+	var block types.Block
+	if err := rlp.DecodeBytes(rlpBlob, &block); err != nil {
+		Fatalf("Failed to decode block: %v", err)
+	}
+	ethcatalyst.RegisterFullSyncTester(stack, eth, &block)
+	log.Info("Registered full-sync tester", "number", block.NumberU64(), "hash", block.Hash())
 }
 
 func SetupMetrics(ctx *cli.Context) {
@@ -2150,6 +2137,8 @@ func SetupMetrics(ctx *cli.Context) {
 			address := fmt.Sprintf("%s:%d", ctx.String(MetricsHTTPFlag.Name), ctx.Int(MetricsPortFlag.Name))
 			log.Info("Enabling stand-alone metrics HTTP endpoint", "address", address)
 			exp.Setup(address)
+		} else if ctx.IsSet(MetricsPortFlag.Name) {
+			log.Warn(fmt.Sprintf("--%s specified without --%s, metrics server will not start.", MetricsPortFlag.Name, MetricsHTTPFlag.Name))
 		}
 	}
 }
